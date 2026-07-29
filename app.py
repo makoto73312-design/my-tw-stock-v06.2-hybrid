@@ -4,13 +4,14 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import requests
+import re
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 # --- 1. 網頁核心外觀配置 ---
 st.set_page_config(page_title="台股雷達 V06.2", page_icon="🇹🇼", layout="wide")
 st.title("🇹🇼 台股量化投資沙盒 V06.2 (法人級多因子雙向感知與四分頁戰術矩陣版)")
-st.markdown("已實裝 **V06.2 四維獨立介面與七維戰術矩陣**：**動作分類看板**、**七維戰術共振矩陣**、**歷史驗證線圖** 與 **多線程平行加速引擎**")
+st.markdown("已實裝 **V06.2 四維獨立介面與七維戰術矩陣**：**動作分類看板**、**七維戰術共振矩陣**、**歷史驗證線圖** 與 **多線程平行加速引擎** (⚡ 支援 Excel / 換行直貼自選清單)")
 
 # --- 2. 側邊欄控制台 ---
 st.sidebar.header("⚙️ 全自動大掃描設定")
@@ -48,9 +49,10 @@ def get_tickers_from_sheet(url):
         return "2330, 2317, 2454, 2603, 3231", {}
 
 default_tickers, cloud_names_dict = get_tickers_from_sheet(GSHEET_URL)
-tickers_input = st.sidebar.text_area("📡 當前雲端同步清單", default_tickers, height=120)
+tickers_input = st.sidebar.text_area("📡 當前雲端同步清單 (可貼 Excel / 換行 / 逗號)", default_tickers, height=120)
 
-temp_raw_list = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+# 🟢 萬能拆分解析器：支援「換行 (Excel直貼)」、「逗號」、「空格」多重分隔符
+temp_raw_list = [t.strip().upper() for t in re.split(r'[\n\r,\s]+', tickers_input) if t.strip()]
 raw_list = list(dict.fromkeys(temp_raw_list))
 
 processed_tickers = []
@@ -403,7 +405,7 @@ tab_v061, tab_matrix, tab_debug, tab_manage = st.tabs([
     "➕ 雲端自選清單管理"
 ])
 
-# --- 分頁 1: 倉位動作快選 + 完整總表 (與原本 V06.1 100% 一致) ---
+# --- 分頁 1: 倉位動作快選 + 完整總表 ---
 with tab_v061:
     if st.session_state.calculated:
         df_res = st.session_state.final_df
@@ -463,14 +465,31 @@ with tab_v061:
     else:
         st.info("💡 請按下上方「🚀 啟動 V06.2 台股全自動多因子掃描引擎」按鈕開始運算。")
 
-# --- 分頁 2: 新增【🎯 七維量化戰術矩陣】獨立專頁 ---
+# --- 分頁 2: 新增【🎯 七維量化戰術矩陣】獨立專頁 (含說明手冊按鍵) ---
 with tab_matrix:
+    st.header("🎯 七維量化戰術矩陣看板 (跨策略共振與型態快選)")
+    st.markdown("透過跨策略訊號共振，1 秒辨識「飆股發動、高勝率突破、大戶吸籌、頭部背離與假突破陷阱」")
+
+    # 🟢 點擊按鍵展開說明手冊 (交互式按鍵手冊)
+    with st.expander("📖 點擊展開：【七維戰術矩陣】七大代表涵義與實戰注意事項說明書", expanded=False):
+        st.markdown("""
+        ### 📖 七維量化戰術矩陣 — 實戰對照與策略手冊
+
+        | 戰術型態 | 代表市場涵義 | 技術與籌碼定義 | 接下來實戰注意事項 |
+        | :--- | :--- | :--- | :--- |
+        | **🔥 1. 全面共振多頭** | **主升段發動 / 飆股首選** | 動能(A) + 波段/槓桿(B/C) + 主力籌碼(E) **三大維度 100% 同步看多**，且具高勝率評級。 | **勝率與延續性最高！** 可優先作為資金集中建倉的第一首選，並以距離現價最近的策略停損價作為第一防守線。 |
+        | **🌊 2. 高勝率波段突破** | **波段起漲 / 單點強突破** | 波段(B) 或 槓桿(C) 策略獨立爆發 `🚀 大膽建倉`，且歷史評級為 **`⭐⭐⭐⭐` 或 `⭐⭐⭐⭐⭐`**。 | **補捉單點強勢突破點！** 雖然動能或籌碼尚未全面共振，但歷史勝率極高，建議建立標準波段部位並嚴守防守線。 |
+        | **🕵️ 3. 籌碼大戶潛伏** | **大戶暗中吸籌 / 蹲點打底** | 主力籌碼(E) 已率先買進或獲利續抱，但技術波段(B/C) 仍在打底橫盤觀望 (`CASH`)。 | **最佳預備觀察名單 (Watchlist)！** 代表大戶在默默吃貨，可先分批建立底倉或等技術面突破時再加碼。 |
+        | **🛒 4. 價值超跌窪地** | **價值超跌 / 左側抄底** | 股價遠低於 200MA (年線) 並觸發抄底策略(D)，且完全通過自由現金流與財報風控安全過濾。 | **左側交易需控管部位！** 超跌反彈可能面臨上方均線反壓，建議小部位分批建立，並以歷史前低嚴格控管風險。 |
+        | **⚠️ 5. 動能/籌碼頭部背離**| **拉高倒貨 / 趨勢末端** | 波段策略(B/C) 仍處於 `📦 獲利續抱`，但短線動能(A) 或 主力籌碼(E) 今日已率先發出 `🔴 防守賣出`。 | **警惕頭部反轉與利潤回吐！** 嚴禁在此時加碼追高，應將移動防守停損價拉緊，準備隨時獲利落袋出場。 |
+        | **🔴 6. 多頭集體撤退** | **三方潰敗 / 系統性避險** | 當天有 2 個 (含) 以上的策略同時爆發 `🔴 防守賣出 (SELL)` 訊號。 | **最高風險警報！** 代表動能、均線與籌碼多重指標同步崩壞。手上有持股者應無條件果斷退場，嚴禁攤平。 |
+        | **❌ 7. 高波動洗盤怪獸**| **假突破誘多 / 洗盤陷阱** | 單日有多個策略跳出 `🚀 大膽建倉`，但所有買訊策略的歷史評級全為 `❌ 不推薦` (歷史回測皆虧損)。 | **堅決觀望，嚴禁追高！** 代表該標的歷史充滿「今天暴漲誘多，明天立刻倒貨」的習性，切勿被當天 K 線誘惑。 |
+        """)
+
+    st.divider()
+
     if st.session_state.calculated:
         df_res = st.session_state.final_df
-        
-        st.header("🎯 七維量化戰術矩陣看板 (跨策略共振與型態快選)")
-        st.markdown("透過跨策略訊號共振，1 秒辨識「飆股發動、高勝率突破、大戶吸籌、頭部背離與假突破陷阱」")
-
         matrix_data = []
         unique_tickers = df_res['台股代號'].unique()
 
