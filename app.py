@@ -70,11 +70,12 @@ enable_earnings_shield = st.sidebar.checkbox("💣 啟用「3 天內發布財報
 @st.cache_data(ttl=1800)
 def fetch_tw_macro_environment():
     try:
-        vix_df = yf.download("^VIX", period="5d", progress=False)
+        # 使用 yf.Ticker().history 避免 yf.download 的 MultiIndex 轉型失敗問題
+        vix_df = yf.Ticker("^VIX").history(period="5d")
         vix_clean = vix_df.dropna(subset=['Close'])
         vix_val = float(vix_clean['Close'].iloc[-1]) if not vix_clean.empty else 18.0
         
-        tw_df = yf.download("^TWII", period="1y", progress=False)
+        tw_df = yf.Ticker("^TWII").history(period="1y")
         tw_clean = tw_df.dropna(subset=['Close'])
         if not tw_clean.empty:
             tw_close = float(tw_clean['Close'].iloc[-1])
