@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 # --- 1. 網頁核心外觀配置 ---
 st.set_page_config(page_title="台股雷達 V06.2", page_icon="🇹🇼", layout="wide")
 st.title("🇹🇼 台股量化投資沙盒 V06.2 (法人級多因子雙向感知與五分頁戰術矩陣版)")
-st.markdown("已實裝 **V06.2 五維獨立介面與七維戰術矩陣**：**動作分類看板**、**七維戰術共振矩陣**、**歷史驗證線圖**、**前向實盤驗證 (昨日訊號vs今日實況)** 與 **多線程平行加速引擎** (⚡ 支援 Excel / 換行直貼自選清單)")
+st.markdown("已實裝 **V06.2 五維獨立介面與七維戰術矩陣**：**動作分類看板**、**七維戰術共振矩陣**、**布林白話型態看板**、**歷史驗證線圖**、**前向實盤驗證 (昨日訊號vs今日實況)** 與 **多線程平行加速引擎**")
 
 # --- 2. 側邊欄控制台 ---
 st.sidebar.header("⚙️ 全自動大掃描設定")
@@ -51,7 +51,6 @@ def get_tickers_from_sheet(url):
 default_tickers, cloud_names_dict = get_tickers_from_sheet(GSHEET_URL)
 tickers_input = st.sidebar.text_area("📡 當前雲端同步清單 (可貼 Excel / 換行 / 逗號)", default_tickers, height=120)
 
-# 🟢 萬能拆分解析器：支援「換行 (Excel直貼)」、「逗號」、「空格」多重分隔符
 temp_raw_list = [t.strip().upper() for t in re.split(r'[\n\r,\s]+', tickers_input) if t.strip()]
 raw_list = list(dict.fromkeys(temp_raw_list))
 
@@ -66,11 +65,10 @@ backtest_days = st.sidebar.slider("歷史回測天數設定", min_value=100, max
 enable_fcf_filter = st.sidebar.checkbox("🛡️ 啟用「自由現金流 > 0」安全過濾", value=True)
 enable_earnings_shield = st.sidebar.checkbox("💣 啟用「3 天內發布財報」強制避險", value=True)
 
-# --- 3. 🌐 V06.2 台股大環境與總經雷達 (VIX & 台灣加權指數) ---
+# --- 3. 🌐 V06.2 台股大環境與總經雷達 (即時 VIX & 加權指數修復) ---
 @st.cache_data(ttl=1800)
 def fetch_tw_macro_environment():
     try:
-        # 使用 yf.Ticker().history 避免 yf.download 的 MultiIndex 轉型失敗問題
         vix_df = yf.Ticker("^VIX").history(period="5d")
         vix_clean = vix_df.dropna(subset=['Close'])
         vix_val = float(vix_clean['Close'].iloc[-1]) if not vix_clean.empty else 18.0
@@ -110,7 +108,6 @@ def fetch_tw_fundamental_and_news(raw_id, processed_id, cloud_dict):
         "3481": "群創", "6695": "芯鼎", "8112": "至上", "4739": "康普"
     }
     
-    # 🔍 尋找順序：1. Google Sheet 雲端自訂表 -> 2. 系統內建字典 -> 3. yfinance 英文清洗
     comp_name = cloud_dict.get(raw_id, "")
     if not comp_name or comp_name.lower() in ["nan", "none", ""]:
         comp_name = TW_NAMES_DICT.get(raw_id, "")
@@ -168,7 +165,7 @@ def fetch_tw_fundamental_and_news(raw_id, processed_id, cloud_dict):
         pass
     return f_info
 
-# --- 5. 技術指標核心大腦 ---
+# --- 5. 技術指標核心大腦 (包含布林通道計算) ---
 def calculate_indicators(df):
     high_low_diff = (df['High'] - df['Low']).replace(0, 0.001) 
     mf_multiplier = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / high_low_diff
@@ -211,6 +208,14 @@ def calculate_indicators(df):
         else:
             macd_shrink[i] = 0
     df['MACD_Shrink'] = macd_shrink
+
+    # 📊 布林通道核心指標 (20, 2)
+    df['BB_Middle'] = df['MA20']
+    df['BB_Std'] = df['Close'].rolling(20).std()
+    df['BB_Upper'] = df['BB_Middle'] + (2 * df['BB_Std'])
+    df['BB_Lower'] = df['BB_Middle'] - (2 * df['BB_Std'])
+    df['BB_Bandwidth'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle'].replace(0, 0.001)
+    df['BB_BW_Q15'] = df['BB_Bandwidth'].rolling(50).quantile(0.15)
     return df
 
 # --- 6. V06.2 台股歷史回測引擎 ---
@@ -341,20 +346,37 @@ def run_backtest_engine(df, strategy_name, days, posture, fund_info):
 
     return "📡 運算完畢", total_return, final_win_rate, total_trades, pf_str, stars, current_status, entry_price_str, sl_price_str, pnl_str, trade_logs, plot_buys, plot_sells, valid_df, raw_entry_price, raw_sl_price
 
-# ⚡ 多線程 Worker 函數 (單個台股處理單元)
+# ⚡ 多線程 Worker 函數
 def process_single_stock_tw(raw_name, ticker, cloud_dict, backtest_days, posture, strategies):
     try:
         df_stock = yf.download(ticker, period="2y", progress=False)
         if df_stock.empty:
-            return [], {}, []
+            return [], {}, [], {}
         df_stock.columns = [col[0] if isinstance(col, tuple) else col for col in df_stock.columns]
         df_stock = calculate_indicators(df_stock)
         
-        df_temp_clean = df_stock.dropna(subset=['Close'])
+        df_temp_clean = df_stock.dropna(subset=['Close', 'BB_Upper'])
         current_close = float(df_temp_clean['Close'].iloc[-1]) if not df_temp_clean.empty else 0.0
         
         fund_info = fetch_tw_fundamental_and_news(raw_name, ticker, cloud_dict)
         
+        # 📊 計算最新一日的布林型態
+        bb_info = {}
+        if not df_temp_clean.empty and len(df_temp_clean) >= 2:
+            last_k = df_temp_clean.iloc[-1]
+            prev_k = df_temp_clean.iloc[-2]
+            c_p, o_p, h_p, l_p = float(last_k['Close']), float(last_k['Open']), float(last_k['High']), float(last_k['Low'])
+            bb_u, bb_l, bb_m = float(last_k['BB_Upper']), float(last_k['BB_Lower']), float(last_k['BB_Middle'])
+            bw_t, bw_prev, bw_q15 = float(last_k['BB_Bandwidth']), float(prev_k['BB_Bandwidth']), float(last_k['BB_BW_Q15'])
+
+            bb_info = {
+                "bb_squeeze_break": (bw_prev <= bw_q15) and (bw_t > bw_prev) and (c_p > bb_u),
+                "bb_riding_upper": (c_p >= bb_u) or (c_p > bb_m + 0.8 * (bb_u - bb_m) and bw_t > bw_prev and c_p > o_p),
+                "bb_squeezing": (bw_t <= bw_q15) and (bb_l <= c_p <= bb_u),
+                "bb_oversold": (l_p < bb_l) or (c_p < bb_l),
+                "bb_fake_breakout": (h_p > bb_u) and (c_p < bb_u) and (c_p < o_p or (h_p - c_p) > (c_p - l_p))
+            }
+
         has_t_minus_1 = False
         df_yesterday = None
         if len(df_temp_clean) >= 2:
@@ -382,7 +404,6 @@ def process_single_stock_tw(raw_name, ticker, cloud_dict, backtest_days, posture
                 "歷史勝率": f"{win * 100:.1f}%", "交易次數": trades, "獲利因子": pf, "推薦指數": stars
             })
             
-            # 昨日訊號實盤比對 (帶入公司名稱)
             if has_t_minus_1:
                 y_res = run_backtest_engine(df_yesterday, strat, backtest_days, posture, fund_info)
                 y_cur_status = y_res[6]
@@ -402,9 +423,9 @@ def process_single_stock_tw(raw_name, ticker, cloud_dict, backtest_days, posture
                             "嚴格防守價": y_sl,
                             "防守線狀態": "🔴 已踩停損出局" if t_low <= y_sl else "🟢 安全未破"
                         })
-        return stock_reports, stock_details, forward_reports
+        return stock_reports, stock_details, forward_reports, {raw_name: {"name": fund_info["comp_name"], "price": f"NT${current_close:.2f}", "bb": bb_info}}
     except Exception:
-        return [], {}, []
+        return [], {}, [], {}
 
 # --- 7. Session State 記憶庫 ---
 if "calculated" not in st.session_state:
@@ -412,6 +433,7 @@ if "calculated" not in st.session_state:
     st.session_state.final_df = None
     st.session_state.forward_df = None
     st.session_state.detail_db = {}
+    st.session_state.bb_db = {}
 
 # --- 8. 頂部總經抬頭控制卡 ---
 col_v1, col_v2, col_v3 = st.columns(3)
@@ -432,10 +454,11 @@ if st.button("🚀 啟動 V06.2 台股全自動多因子掃描引擎 (⚡ 多線
                 futures.append(f)
                 
         for f in futures:
-            s_reports, s_details, f_reports = f.result()
+            s_reports, s_details, f_reports, bb_pack = f.result()
             if s_reports:
                 master_report.extend(s_reports)
                 st.session_state.detail_db.update(s_details)
+                st.session_state.bb_db.update(bb_pack)
             if f_reports:
                 forward_report.extend(f_reports)
                 
@@ -513,12 +536,11 @@ with tab_v061:
     else:
         st.info("💡 請按下上方「🚀 啟動 V06.2 台股全自動多因子掃描引擎」按鈕開始運算。")
 
-# --- 分頁 2: 【🎯 七維量化戰術矩陣】獨立專頁 (100% 還原原版完整說明手冊) ---
+# --- 分頁 2: 【🎯 七維量化戰術矩陣】+【📊 布林軌道白話動作看板】 ---
 with tab_matrix:
     st.header("🎯 七維量化戰術矩陣看板 (跨策略共振與型態快選)")
     st.markdown("透過跨策略訊號共振，1 秒辨識「飆股發動、高勝率突破、大戶吸籌、頭部背離與假突破陷阱」")
 
-    # 🟢 點擊按鍵展開說明手冊 (100% 完整 Markdown 對照表格)
     with st.expander("📖 點擊展開：【七維戰術矩陣】七大代表涵義與實戰注意事項說明書", expanded=False):
         st.markdown("""
         ### 📖 七維量化戰術矩陣 — 實戰對照與策略手冊
@@ -622,6 +644,52 @@ with tab_matrix:
         with st.expander(f"❌ 7. 高波動洗盤怪獸 (單日多策略買訊，但歷史評級全為不推薦，嚴禁追高) — {len(df_m8)} 檔", expanded=len(df_m8)>0):
             if not df_m8.empty: st.dataframe(df_m8, use_container_width=True, hide_index=True)
             else: st.info("今日無出現高波動洗盤怪獸標的。")
+
+        # 🟢 新增：【📊 布林軌道白話動作型態區塊】
+        st.divider()
+        st.subheader("📊 布林軌道實戰型態與白話動作看板")
+        st.markdown("結合布林通道 (Bollinger Bands) 統計學動能，轉譯為小白也能秒懂的直白交易動作指令：")
+
+        bb_db = st.session_state.bb_db
+        list_bb1, list_bb2, list_bb3, list_bb4, list_bb5 = [], [], [], [], []
+
+        for tk_id, pack in bb_db.items():
+            bb = pack.get("bb", {})
+            c_name, c_price = pack.get("name", ""), pack.get("price", "")
+            item = {"台股代號": tk_id, "公司名稱": c_name, "當前股價": c_price}
+            
+            if bb.get("bb_squeeze_break"): list_bb1.append(item)
+            if bb.get("bb_riding_upper"): list_bb2.append(item)
+            if bb.get("bb_squeezing"): list_bb3.append(item)
+            if bb.get("bb_oversold"): list_bb4.append(item)
+            if bb.get("bb_fake_breakout"): list_bb5.append(item)
+
+        col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
+        col_b1.metric("💥 帶寬擠壓剛爆發", f"{len(list_bb1)} 檔")
+        col_b2.metric("🚀 沿上軌強勢貼軌", f"{len(list_bb2)} 檔")
+        col_b3.metric("🤐 極度縮口預備", f"{len(list_bb3)} 檔")
+        col_b4.metric("🛒 跌破下軌極端超跌", f"{len(list_bb4)} 檔")
+        col_b5.metric("⚠️ 上軌滯漲/假突破", f"{len(list_bb5)} 檔")
+
+        with st.expander(f"💥 1. 帶寬擠壓剛爆發 ➔ 🚀 【建議進場】主力帶量衝刺，可大膽建立買點 ({len(list_bb1)} 檔)", expanded=len(list_bb1)>0):
+            if list_bb1: st.dataframe(pd.DataFrame(list_bb1), use_container_width=True, hide_index=True)
+            else: st.info("今日無帶寬壓縮後剛爆發之個股。")
+
+        with st.expander(f"🚀 2. 沿上軌強勢貼軌 ➔ 📦 【獲利續抱】強勢股推升中，抱緊切勿急著賣出 ({len(list_bb2)} 檔)", expanded=len(list_bb2)>0):
+            if list_bb2: st.dataframe(pd.DataFrame(list_bb2), use_container_width=True, hide_index=True)
+            else: st.info("今日無強勢貼上軌推升之個股。")
+
+        with st.expander(f"🤐 3. 極度縮口預備 ➔ 👀 【加入觀察】能量積蓄中，先放在觀察清單靜待突破 ({len(list_bb3)} 檔)", expanded=False):
+            if list_bb3: st.dataframe(pd.DataFrame(list_bb3), use_container_width=True, hide_index=True)
+            else: st.info("今日無極度縮口打底之個股。")
+
+        with st.expander(f"🛒 4. 跌破下軌極端超跌 ➔ 🛒 【小量試探】短線超跌，僅適合左側小量試探反彈 ({len(list_bb4)} 檔)", expanded=False):
+            if list_bb4: st.dataframe(pd.DataFrame(list_bb4), use_container_width=True, hide_index=True)
+            else: st.info("今日無摔破下軌極端超跌之個股。")
+
+        with st.expander(f"⚠️ 5. 上軌滯漲/假突破 ➔ ⚠️ 【嚴禁追高】高檔拋壓沉重，拉緊防守停損/準備落袋 ({len(list_bb5)} 檔)", expanded=len(list_bb5)>0):
+            if list_bb5: st.dataframe(pd.DataFrame(list_bb5), use_container_width=True, hide_index=True)
+            else: st.info("今日無出現上軌滯漲假突破警訊之個股。")
     else:
         st.info("💡 請按下上方「🚀 啟動 V06.2 台股全自動多因子掃描引擎」按鈕開始運算。")
 
@@ -648,7 +716,7 @@ with tab_debug:
     else:
         st.info("💡 請按下上方「🚀 啟動 V06.2 台股全自動多因子掃描引擎」按鈕開始運算。")
 
-# --- 分頁 4: 新增【📈 昨日訊號 vs 今日成效】前向實盤驗證引擎 ---
+# --- 分頁 4: 📈 昨日訊號 vs 今日成效 (前向實盤驗證) ---
 with tab_forward:
     st.header("📈 前向實盤驗證 (昨日訊號 vs 今日成效)")
     st.markdown("由系統自動回到昨天收盤抓出買訊，並與今日最新盤中跳動實況進行殘酷比對，檢驗策略抗洗盤與開盤跳空能力。")
